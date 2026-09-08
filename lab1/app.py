@@ -2,9 +2,13 @@ import sqlite3
 from flask import Flask, request, render_template_string, jsonify, make_response
 import jwt
 import datetime
+import secrets
+from markupsafe import escape
 
 app = Flask(__name__)
-JWT_SECRET = "student2026" # уязвимый слабый ключ для взлома
+
+# ИСПРАВЛЕНО: Задание 4 - криптостойкий секрет (256 бит)
+JWT_SECRET = secrets.token_hex(32)
 
 def init_db():
     conn = sqlite3.connect('lab.db')
@@ -21,50 +25,55 @@ def init_db():
 def index():
     return "<h3>Лабораторная работа №1. Web AppSec</h3><p>Эндпоинты: /login, /search, /api/profile/&lt;id&gt;, /admin</p>"
 
-# уязвимость 1: SQL-инъекция
+# ИСПРАВЛЕНО: Задание 1 - параметризованный запрос
 @app.route('/login', methods=['POST'])
 def login():
     username = request.form.get('username', '')
     password = request.form.get('password', '')
     conn = sqlite3.connect('lab.db')
     c = conn.cursor()
-    # уязвимый запрос без параметризации
-    query = f"SELECT id, username, role FROM users WHERE username='{username}' AND password='{password}'"
-    try:
-        c.execute(query)
-        user = c.fetchone()
-        if user:
-            token = jwt.encode({'user_id': user[0], 'username': user[1], 'role': user[2], 'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=1)}, JWT_SECRET, algorithm='HS256')
-            resp = make_response(f"Login success. Role: {user[2]}")
-            # уязвимые cookies: без HttpOnly, Secure и SameSite
-            resp.set_cookie('auth_token', token)
-            return resp
-        return "Invalid credentials", 401
-    except Exception as e:
-        return str(e), 500
+    c.execute("SELECT id, username, role FROM users WHERE username=? AND password=?", (username, password))
+    user = c.fetchone()
+    if user:
+        token = jwt.encode({'user_id': user[0], 'username': user[1], 'role': user[2], 'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=1)}, JWT_SECRET, algorithm='HS256')
+        resp = make_response(f"Login success. Role: {user[2]}")
+        # ИСПРАВЛЕНО: Задание 5 - безопасные cookie
+        resp.set_cookie('auth_token', token, httponly=True, secure=True, samesite='Lax')
+        return resp
+    return "Invalid credentials", 401
 
-# уязвимость 2: Reflected XSS
+# ИСПРАВЛЕНО: Задание 2 - XSS с экранированием и CSP
 @app.route('/search', methods=['GET'])
 def search():
     query = request.args.get('q', '')
-    # уязвимый рендеринг без санитизации
-    template = f"<h1>Результаты поиска для: {query}</h1><p>Ничего не найдено.</p>"
-    return render_template_string(template)
+    safe_query = escape(query)
+    template = f"<h1>Результаты поиска для: {safe_query}</h1><p>Ничего не найдено.</p>"
+    response = make_response(render_template_string(template))
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'strict-dynamic' 'nonce-123456'"
+    return response
 
-
-# уязвимость 3: BOLA / IDOR
+# ИСПРАВЛЕНО: Задание 3 - проверка авторизации для BOLA
 @app.route('/api/profile/<int:user_id>', methods=['GET'])
 def get_profile(user_id):
-    # уязвимость: нет проверки, принадлежит ли запрашиваемый ID текущему авторизованному пользователю
-    conn = sqlite3.connect('lab.db')
-    c = conn.cursor()
-    c.execute("SELECT username, private_data FROM users WHERE id=?", (user_id,))
-    user = c.fetchone()
-    if user:
-        return jsonify({"username": user[0], "private_data": user[1]})
-    return jsonify({"error": "User not found"}), 404
+    token = request.cookies.get('auth_token')
+    if not token:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        decoded = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        current_user_id = decoded.get('user_id')
+        if current_user_id != user_id:
+            return jsonify({"error": "Access denied: You can only access your own profile"}), 403
+        conn = sqlite3.connect('lab.db')
+        c = conn.cursor()
+        c.execute("SELECT username, private_data FROM users WHERE id=?", (user_id,))
+        user = c.fetchone()
+        if user:
+            return jsonify({"username": user[0], "private_data": user[1]})
+        return jsonify({"error": "User not found"}), 404
+    except:
+        return jsonify({"error": "Invalid token"}), 401
 
-# уязвимость 4: ненадежный JWT
+# ИСПРАВЛЕНО: Задание 4 - использует новый сильный секрет
 @app.route('/admin', methods=['GET'])
 def admin_panel():
     token = request.cookies.get('auth_token')
