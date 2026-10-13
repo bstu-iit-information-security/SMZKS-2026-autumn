@@ -28,19 +28,22 @@ def login():
     password = request.form.get('password', '')
     conn = sqlite3.connect('lab.db')
     c = conn.cursor()
-    # уязвимый запрос без параметризации
-    query = f"SELECT id, username, role FROM users WHERE username='{username}' AND password='{password}'"
     try:
-        c.execute(query)
+        # Безопасный вызов: переменная query больше не нужна,
+        # данные передаются вторым аргументом в кортеже
+        c.execute("SELECT id, username, role FROM users WHERE username=? AND password=?", (username, password))
+
         user = c.fetchone()
         if user:
-            token = jwt.encode({'user_id': user[0], 'username': user[1], 'role': user[2], 'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=1)}, JWT_SECRET, algorithm='HS256')
+            token = jwt.encode({'user_id': user[0], 'username': user[1], 'role': user[2],
+                                'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=1)}, JWT_SECRET,
+                               algorithm='HS256')
             resp = make_response(f"Login success. Role: {user[2]}")
-            # уязвимые cookies: без HttpOnly, Secure и SameSite
             resp.set_cookie('auth_token', token)
             return resp
         return "Invalid credentials", 401
     except Exception as e:
+        # Это то место, которое выдало вам ошибку 500
         return str(e), 500
 
 # уязвимость 2: Reflected XSS
@@ -79,7 +82,14 @@ def admin_panel():
         return "Token expired", 401
     except jwt.InvalidTokenError:
         return "Invalid token", 401
-
+# Добавление защитного заголовка CSP для всех ответов сервера
+@app.after_request
+def apply_csp(response):
+    response.headers['Content-Security-Policy'] = (
+        "script-src 'nonce-rAnd0m123Key' 'strict-dynamic'; "
+        "object-src 'none';"
+    )
+    return response
 if __name__ == '__main__':
     init_db()
     app.run(host='0.0.0.0', port=5000)
