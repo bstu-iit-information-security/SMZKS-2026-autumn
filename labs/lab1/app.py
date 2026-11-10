@@ -2,9 +2,10 @@ import sqlite3
 from flask import Flask, request, render_template_string, jsonify, make_response
 import jwt
 import datetime
+import secrets
 
 app = Flask(__name__)
-JWT_SECRET = "student2026" # уязвимый слабый ключ для взлома
+JWT_SECRET = secrets.token_hex(32) # уязвимый слабый ключ для взлома
 
 def init_db():
     conn = sqlite3.connect('lab.db')
@@ -29,9 +30,9 @@ def login():
     conn = sqlite3.connect('lab.db')
     c = conn.cursor()
     # уязвимый запрос без параметризации
-    query = f"SELECT id, username, role FROM users WHERE username='{username}' AND password='{password}'"
+    query = "SELECT id, username, role FROM users WHERE username=? AND password=?"
     try:
-        c.execute(query)
+        c.execute(query, (username, password))
         user = c.fetchone()
         if user:
             token = jwt.encode({'user_id': user[0], 'username': user[1], 'role': user[2], 'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=1)}, JWT_SECRET, algorithm='HS256')
@@ -49,20 +50,31 @@ def search():
     query = request.args.get('q', '')
     # уязвимый рендеринг без санитизации
     template = f"<h1>Результаты поиска для: {query}</h1><p>Ничего не найдено.</p>"
-    return render_template_string(template)
+    response = make_response(render_template_string(template))
+    response.headers['Content-Security-Policy'] = "default-src 'self'"
+    return response
 
 
 # уязвимость 3: BOLA / IDOR
 @app.route('/api/profile/<int:user_id>', methods=['GET'])
 def get_profile(user_id):
     # уязвимость: нет проверки, принадлежит ли запрашиваемый ID текущему авторизованному пользователю
-    conn = sqlite3.connect('lab.db')
-    c = conn.cursor()
-    c.execute("SELECT username, private_data FROM users WHERE id=?", (user_id,))
-    user = c.fetchone()
-    if user:
-        return jsonify({"username": user[0], "private_data": user[1]})
-    return jsonify({"error": "User not found"}), 404
+    token = request.cookies.get('auth_token')
+    if not token:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        decoded = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        if decoded.get('user_id') != user_id:
+            return jsonify({"error": "Forbidden"}), 403
+        conn = sqlite3.connect('lab.db')
+        c = conn.cursor()
+        c.execute("SELECT username, private_data FROM users WHERE id=?", (user_id,))
+        user = c.fetchone()
+        if user:
+            return jsonify({"username": user[0], "private_data": user[1]})
+        return jsonify({"error": "User not found"}), 404
+    except jwt.InvalidTkenError:
+        return jsonify({"error": "Invalid token"}), 401
 
 # уязвимость 4: ненадежный JWT
 @app.route('/admin', methods=['GET'])
