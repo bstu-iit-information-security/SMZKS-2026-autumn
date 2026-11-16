@@ -1,0 +1,13 @@
+# Добавляет к официальному стенду Wazuh 4.7.3 целевой сервер с агентом.
+# Файл лежит рядом с docker-compose.yml и применяется автоматически.
+# Файлы официального стенда (docker-compose.yml, config/) не меняются.
+services:
+  target-agent:
+    build: ./agent
+    platform: linux/amd64
+    hostname: ubuntu-target
+    restart: always
+    ports:
+      - "8080:80"
+    depends_on:
+      - wazuh.manager
