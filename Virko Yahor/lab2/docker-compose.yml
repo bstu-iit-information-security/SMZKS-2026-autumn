@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  waf:
+    image: owasp/modsecurity-crs:nginx
+    ports:
+      - "80:80"
+    environment:
+      - BACKEND=http://backend:5000
+      - MODSEC_RULE_ENGINE=On
+    volumes:
+      - ./nginx/user_nginx.conf:/etc/nginx/templates/conf.d/default.conf.template
+      - ./nginx/custom.conf:/etc/modsecurity.d/owasp-crs/rules/custom.conf
+    depends_on:
+      - backend
+  backend:
+    build: ./backend
+    ports:
+      - "5000:5000"
